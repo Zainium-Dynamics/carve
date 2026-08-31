@@ -1,0 +1,32 @@
+[package]
+name = "carve"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+authors = ["Ali-Zain <alizain@zainiumdynamics.tech>"]
+description = "Carve — Zainium OS CLI installer (interactive TUI + headless auto-install), no GUI/Wayland deps"
+homepage = "https://zainiumdynamics.tech"
+license = "GPL-3.0-only"
+# Copyright (c) 2026 Zainiumdynamics. All rights reserved.
+# Designed for Zainium OS by Zainiumdynamics.
+
+[[bin]]
+name = "carve"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+log = "0.4"
+env_logger = "0.11"
+libc = "0.2"
+inquire = "0.7"
+elevate-crypto = { git = "https://github.com/Zainium-Dynamics/elevate-privilege.git", branch = "main", default-features = false, features = ["std", "password", "legacy_shadow"] }
+quantra-net-common = { package = "common", git = "https://github.com/Zainium-Dynamics/Quantra-System.git" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
