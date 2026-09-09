@@ -84,8 +84,45 @@ pub fn job_deploy_os(plan: &InstallPlan, progress: &mut ProgressState) -> Result
 
     if result.is_ok() && !plan.dry_run {
         remove_installer_from_target(&root, progress);
+        lock_boot_critical_files(&root, progress);
     }
     result
+}
+
+/// `chattr +i` on the boot kernel/initramfs/bootloader files -- a real,
+/// kernel-enforced (ext4/btrfs immutable inode flag) block on unlink/write
+/// that holds regardless of which tool touches the file, unlike
+/// usercore::protect (userutiles-only, opt-in per binary). Best-effort:
+/// chattr isn't available/meaningful on every target filesystem (e.g.
+/// tmpfs), so a failure here is logged, not a deploy failure.
+fn lock_boot_critical_files(root: &Path, progress: &mut ProgressState) {
+    let sys = zaisys(root);
+    let dirs = [sys.join("kernel"), sys.join("limine")];
+    for dir in dirs {
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            match Command::new("chattr").arg("+i").arg(&path).status() {
+                Ok(status) if status.success() => {
+                    progress.append_log(format!("deploy: locked {} (chattr +i)", path.display()));
+                }
+                Ok(status) => progress.append_log(format!(
+                    "deploy: WARN — chattr +i on {} exited {status}",
+                    path.display()
+                )),
+                Err(e) => progress.append_log(format!(
+                    "deploy: WARN — chattr not available, {} left unlocked: {e}",
+                    path.display()
+                )),
+            }
+        }
+    }
 }
 
 /// Safety net, not the primary fix — the packed image / live overlayer
