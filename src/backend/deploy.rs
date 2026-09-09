@@ -89,13 +89,25 @@ pub fn job_deploy_os(plan: &InstallPlan, progress: &mut ProgressState) -> Result
     result
 }
 
-/// `chattr +i` on the boot kernel/initramfs/bootloader files -- a real,
-/// kernel-enforced (ext4/btrfs immutable inode flag) block on unlink/write
-/// that holds regardless of which tool touches the file, unlike
-/// usercore::protect (userutiles-only, opt-in per binary). Best-effort:
-/// chattr isn't available/meaningful on every target filesystem (e.g.
-/// tmpfs), so a failure here is logged, not a deploy failure.
+/// Sets the immutable inode flag (`chattr +i` equivalent) on the boot
+/// kernel/initramfs/bootloader files -- a real, kernel-enforced
+/// (ext4/btrfs immutable flag) block on unlink/write that holds
+/// regardless of which tool touches the file, unlike usercore::protect
+/// (userutiles-only, opt-in per binary). Done via the raw FS_IOC_*
+/// ioctls directly (same ones chattr(1) itself uses) rather than
+/// shelling out to the `chattr` binary -- these exact paths are
+/// protect.rs-guarded against modification via Zainium's own chattr,
+/// specifically so a later `chattr -i` can't undo this; going straight
+/// to the ioctl is how carve, a trusted installer, is meant to bypass
+/// that userutiles-level guard, same as its direct fs::remove_file
+/// calls elsewhere in this file. Best-effort: the ioctl isn't available
+/// on every target filesystem (e.g. tmpfs), so a failure here is
+/// logged, not a deploy failure.
+const FS_IMMUTABLE_FL: libc::c_int = 0x00000010;
+
 fn lock_boot_critical_files(root: &Path, progress: &mut ProgressState) {
+    use std::os::unix::io::AsRawFd;
+
     let sys = zaisys(root);
     let dirs = [sys.join("kernel"), sys.join("limine")];
     for dir in dirs {
@@ -108,16 +120,26 @@ fn lock_boot_critical_files(root: &Path, progress: &mut ProgressState) {
             if !path.is_file() {
                 continue;
             }
-            match Command::new("chattr").arg("+i").arg(&path).status() {
-                Ok(status) if status.success() => {
-                    progress.append_log(format!("deploy: locked {} (chattr +i)", path.display()));
-                }
-                Ok(status) => progress.append_log(format!(
-                    "deploy: WARN — chattr +i on {} exited {status}",
-                    path.display()
-                )),
+            let result = fs::OpenOptions::new()
+                .read(true)
+                .open(&path)
+                .and_then(|f| {
+                    let mut flags: libc::c_int = 0;
+                    // SAFETY: `flags` is a valid 4-byte out-param for FS_IOC_GETFLAGS.
+                    if unsafe { libc::ioctl(f.as_raw_fd(), libc::FS_IOC_GETFLAGS as _, &mut flags) } == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    flags |= FS_IMMUTABLE_FL;
+                    // SAFETY: `flags` is a valid 4-byte in-param for FS_IOC_SETFLAGS.
+                    if unsafe { libc::ioctl(f.as_raw_fd(), libc::FS_IOC_SETFLAGS as _, &flags) } == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            match result {
+                Ok(()) => progress.append_log(format!("deploy: locked {} (immutable)", path.display())),
                 Err(e) => progress.append_log(format!(
-                    "deploy: WARN — chattr not available, {} left unlocked: {e}",
+                    "deploy: WARN — could not lock {} immutable: {e}",
                     path.display()
                 )),
             }
