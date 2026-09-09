@@ -101,8 +101,13 @@ pub fn job_deploy_os(plan: &InstallPlan, progress: &mut ProgressState) -> Result
 /// deploy failure, it just means there was nothing to clean up.
 fn remove_installer_from_target(root: &Path, progress: &mut ProgressState) {
     let hub = syshub(root);
+    let sys = zaisys(root);
     let paths = [
-        hub.join("bin/carve"),
+        // carve itself lives in zaisys, not syshub -- syshub stays
+        // graphical-only/immutable, never carries install-only content.
+        sys.join("bin/carve"),
+        sys.join("lib/systemd/system/carve-install.service"),
+        sys.join("lib/systemd/system/carve-install.target"),
         hub.join("bin/zainium-installer"),
         hub.join("share/applications/tech.zainiumdynamics.Installer.desktop"),
         hub.join("share/icons/hicolor/scalable/apps/tech.zainiumdynamics.Installer.svg"),

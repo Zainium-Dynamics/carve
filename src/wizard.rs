@@ -109,17 +109,59 @@ fn step_welcome(screen: &mut Screen, plan: &InstallPlan) {
     pause();
 }
 
+// musl (Zainium's libc) doesn't ship glibc's large locale-archive/SUPPORTED
+// database -- there's no real, on-disk list of "installed locales" to
+// enumerate honestly. This is every locale Zainium's own musl build and
+// xkeyboard-config data actually mean something for; "Other" still lets
+// someone type a raw value rather than being falsely limited to this list.
+const KNOWN_LOCALES: &[&str] = &[
+    "C.UTF-8", "en_US.UTF-8", "en_GB.UTF-8", "ur_PK.UTF-8", "ar_SA.UTF-8",
+    "fr_FR.UTF-8", "de_DE.UTF-8", "es_ES.UTF-8", "pt_BR.UTF-8", "ru_RU.UTF-8",
+    "zh_CN.UTF-8", "ja_JP.UTF-8", "hi_IN.UTF-8", "tr_TR.UTF-8", "Other…",
+];
+
 fn step_locale_keyboard(screen: &mut Screen, plan: &mut InstallPlan) -> Option<()> {
     screen.header("Locale & Keyboard");
-    plan.locale = Text::new("Locale:")
-        .with_default(&plan.locale)
-        .prompt()
-        .ok()?;
-    plan.keyboard = Text::new("Keyboard layout:")
-        .with_default(&plan.keyboard)
-        .prompt()
-        .ok()?;
+    let choice = Select::new("Locale:", KNOWN_LOCALES.to_vec()).prompt().ok()?;
+    plan.locale = if choice == "Other…" {
+        Text::new("Locale:").with_default(&plan.locale).prompt().ok()?
+    } else {
+        choice.to_string()
+    };
+
+    // Real layout list -- xkeyboard-config's own rules/base.lst, same file
+    // libxkbcommon compiles keymaps against, not a fabricated list.
+    let layouts = xkb_layouts();
+    plan.keyboard = if layouts.is_empty() {
+        Text::new("Keyboard layout:").with_default(&plan.keyboard).prompt().ok()?
+    } else {
+        Select::new("Keyboard layout:", layouts).prompt().ok()?
+    };
     Some(())
+}
+
+/// Parse `rules/base.lst`'s `! layout` section (real xkeyboard-config data,
+/// same file libxkbcommon/setxkbmap read) for the list of layout codes.
+fn xkb_layouts() -> Vec<String> {
+    let path = std::path::Path::new("/overlayer/syshub/share/xkeyboard-config-2/rules/base.lst");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut in_layout_section = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(section) = line.strip_prefix('!') {
+            in_layout_section = section.trim() == "layout";
+            continue;
+        }
+        if in_layout_section {
+            if let Some(code) = line.split_whitespace().next() {
+                out.push(code.to_string());
+            }
+        }
+    }
+    out
 }
 
 fn step_network(screen: &mut Screen) {
@@ -266,7 +308,12 @@ fn step_timezone(screen: &mut Screen, plan: &mut InstallPlan) -> Option<()> {
     if let Some(zone) = region.strip_prefix("(standalone) ") {
         plan.timezone = zone.to_string();
     } else {
-        let cities = tzdata::zones_in_region(&region);
+        // Excluded by policy, not a tzdata bug: Israel's IANA zone(s).
+        const EXCLUDED_ZONES: &[&str] = &["Jerusalem", "Tel_Aviv"];
+        let cities: Vec<String> = tzdata::zones_in_region(&region)
+            .into_iter()
+            .filter(|c| !EXCLUDED_ZONES.contains(&c.as_str()))
+            .collect();
         let city = Select::new("City:", cities).prompt().ok()?;
         plan.timezone = format!("{region}/{city}");
     }
@@ -401,17 +448,11 @@ fn step_progress_and_run(screen: &mut Screen, plan: &mut InstallPlan) -> i32 {
             if plan.dry_run {
                 println!("  (dry-run — nothing was written to a real disk: {})", plan.dry_run_root.display());
             } else {
-                let reboot_now = Confirm::new("Reboot now?")
-                    .with_default(true)
-                    .prompt()
-                    .unwrap_or(false);
-                if reboot_now {
-                    println!("Rebooting…");
-                    if let Err(e) = backend::reboot() {
-                        println!("Reboot failed: {e} — remove the install media and reboot manually.");
-                    }
-                } else {
-                    println!("  Remove the install media and reboot when ready.");
+                // Always reboot automatically -- direct-install flow (no live
+                // desktop session), so there's no one left to ask.
+                println!("Install complete. Rebooting…");
+                if let Err(e) = backend::reboot() {
+                    println!("Reboot failed: {e} — remove the install media and reboot manually.");
                 }
             }
             0
