@@ -167,6 +167,16 @@ fn remove_installer_from_target(root: &Path, progress: &mut ProgressState) {
         sys.join("bin/carve"),
         sys.join("lib/systemd/system/carve-install.service"),
         sys.join("lib/systemd/system/carve-install.target"),
+        // zainium-installer (the GUI live-desktop installer) and its own
+        // live-desktop scaffolding -- cleaned up here too in case the
+        // console-direct path was the one actually used to install.
+        sys.join("bin/zainium-installer"),
+        sys.join("share/applications/tech.zainiumdynamics.Installer.desktop"),
+        sys.join("share/icons/hicolor/scalable/apps/tech.zainiumdynamics.Installer.svg"),
+        sys.join("bin/cosmic-session-start"),
+        sys.join("greetd/live.toml"),
+        sys.join("lib/systemd/system/zainium-live-desktop.service"),
+        sys.join("lib/systemd/system/zainium-live-desktop.target"),
         hub.join("bin/zainium-installer"),
         hub.join("share/applications/tech.zainiumdynamics.Installer.desktop"),
         hub.join("share/icons/hicolor/scalable/apps/tech.zainiumdynamics.Installer.svg"),
